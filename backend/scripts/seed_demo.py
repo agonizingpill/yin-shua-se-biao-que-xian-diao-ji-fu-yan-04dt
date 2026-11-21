@@ -5,6 +5,7 @@ from src.models import User,PrintJob,ProofSheet,Adjustment,ReferenceSheet
 from src.auth import hash_password
 from src.production_models import PlateSet,PressSample,PressHold
 from src.dispatch_models import PaperLot,PressMachine
+from src.reservation_models import JobClosure
 
 def seed():
     Base.metadata.create_all(engine)
@@ -27,5 +28,12 @@ def seed():
         for code,gsm,qty in [('PAPER-157-A',157,20000),('PAPER-128-A',128,8000)]:
             if not s.scalar(select(PaperLot).where(PaperLot.code==code)):s.add(PaperLot(code=code,gsm=gsm,available_sheets=qty))
         if not s.scalar(select(PressMachine).where(PressMachine.code=='PRESS-04')):s.add(PressMachine(code='PRESS-04'))
-        s.commit();print({t.__tablename__:s.scalar(select(func.count()).select_from(t))for t in (User,PrintJob,ProofSheet,Adjustment,ReferenceSheet)})
+        s.flush()
+        demo=[('PJ-CL-157-01','157g 哑粉',1000,1028,'2026-09-02'),('PJ-CL-157-02','157g 哑粉',1500,1542,'2026-09-09'),('PJ-CL-157-03','157g 哑粉',2000,2074,'2026-09-16'),('PJ-CL-157-04','157g 哑粉',1200,1245,'2026-09-23'),('PJ-CL-157-05','157g 哑粉',1800,1841,'2026-09-30'),('PJ-CL-157-06','157g 哑粉',1600,1666,'2026-10-07'),('PJ-CL-128-01','128g 铜版',1000,1044,'2026-09-12'),('PJ-CL-128-02','128g 铜版',1400,1437,'2026-09-26')]
+        for code,paper,planned,actual,day in demo:
+            j=s.scalar(select(PrintJob).where(PrintJob.code==code))
+            if not j:
+                j=PrintJob(code=code,title='结案留档 '+code[-2:],paper=paper,target_density=1.4,status='closed');s.add(j);s.flush()
+            if not s.scalar(select(JobClosure).where(JobClosure.job_id==j.id)):s.add(JobClosure(job_id=j.id,planned_sheets=planned,actual_sheets=actual,note='历史结案留档，含调机废纸',closed_by='admin@qianye.demo',closed_at=day+'T09:00:00+00:00'))
+        s.commit();print({t.__tablename__:s.scalar(select(func.count()).select_from(t))for t in (User,PrintJob,ProofSheet,Adjustment,ReferenceSheet,JobClosure)})
 if __name__=='__main__':seed()

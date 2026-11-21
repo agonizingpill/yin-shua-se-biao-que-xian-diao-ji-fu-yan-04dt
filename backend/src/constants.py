@@ -1,4 +1,5 @@
 ROLES=('admin','pressman','viewer')
 DEFECTS=('合格','乳化','偏色')
-JOB_STATES=('setup','adjusting','production','hold')
+JOB_STATES=('setup','adjusting','production','hold','closed')
 ADJUSTMENT_STATES=('issued','executed','signed')
+RESERVATION_STATES=('draft','held','issued','cancelled')

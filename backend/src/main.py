@@ -13,9 +13,10 @@ from .services import get,pack,audit,editable_proof,issue,change_instruction,sig
 from .middlewares import RequestTrace,BurstGuard
 from .production_routes import router as production
 from .dispatch_routes import router as dispatches
+from .reservation_routes import router as reservations
 from .plate_service import require_ready
 from .paper_service import locked
-from .constants import ROLES,DEFECTS,JOB_STATES,ADJUSTMENT_STATES
+from .constants import ROLES,DEFECTS,JOB_STATES,ADJUSTMENT_STATES,RESERVATION_STATES
 r=redis.Redis.from_url(os.environ['REDIS_URL'],decode_responses=True)
 @asynccontextmanager
 async def lifespan(app):
@@ -29,7 +30,7 @@ async def lifespan(app):
 app=FastAPI(title='铅叶 · 色标缺陷与调机复验',lifespan=lifespan);app.add_middleware(RequestTrace);app.add_middleware(BurstGuard)
 @app.exception_handler(IntegrityError)
 async def conflict(req,exc):return JSONResponse({'detail':'工单、色标编号或首张调机指令重复，请核对'},409)
-app.include_router(production);app.include_router(dispatches)
+app.include_router(production);app.include_router(dispatches);app.include_router(reservations)
 @app.get('/health')
 def health(s=Depends(db_session)):s.execute(select(1));r.ping();return {'status':'ok'}
 @app.post('/auth/login')
@@ -40,7 +41,7 @@ def login(p:Login,s=Depends(db_session)):
 @app.get('/me')
 def me(u=Depends(current)):return {'email':u.email,'role':u.role}
 @app.get('/enums')
-def enums(u=Depends(current)):return {'roles':ROLES,'defects':DEFECTS,'job_states':JOB_STATES,'adjustment_states':ADJUSTMENT_STATES}
+def enums(u=Depends(current)):return {'roles':ROLES,'defects':DEFECTS,'job_states':JOB_STATES,'adjustment_states':ADJUSTMENT_STATES,'reservation_states':RESERVATION_STATES}
 @app.get('/jobs')
 def jobs(s=Depends(db_session),u=Depends(current)):return [pack(x)for x in s.scalars(select(PrintJob).order_by(PrintJob.id))]
 @app.post('/jobs')
@@ -51,7 +52,9 @@ def edit_job(jid:int,p:JobInput,s=Depends(db_session),u=Depends(writers)):
     j=locked(s,PrintJob,jid)
     if j.status!='setup'or s.scalar(select(ProofSheet.id).where(ProofSheet.job_id==jid,ProofSheet.classification_state.in_(['classifying','classified']))):raise HTTPException(409,'已有判读或调机，工单纸张与目标密度冻结')
     from .dispatch_models import PaperIssue
+    from .reservation_models import PaperReservation
     if p.paper!=j.paper and s.scalar(select(PaperIssue.id).where(PaperIssue.job_id==jid)):raise HTTPException(409,'已有领纸，工单纸张冻结')
+    if p.paper!=j.paper and s.scalar(select(PaperReservation.id).where(PaperReservation.job_id==jid,PaperReservation.state.in_(['held','issued']))):raise HTTPException(409,'已有留纸，工单纸张冻结')
     for k,value in p.model_dump().items():setattr(j,k,value)
     audit(s,u,'修订开机单 '+j.code);s.commit();return pack(j)
 @app.get('/proofs')
@@ -59,7 +62,7 @@ def proofs(s=Depends(db_session),u=Depends(current)):return [pack(x)for x in s.s
 @app.post('/proofs')
 def add_proof(p:ProofInput,s=Depends(db_session),u=Depends(writers)):
     j=get(s,PrintJob,p.job_id)
-    if j.status in ['production','hold']:raise HTTPException(409,'量产或停机工单请通过量产抽检/停机复验录入新色标')
+    if j.status in ['production','hold','closed']:raise HTTPException(409,'量产、停机或已结案工单请通过量产抽检/停机复验录入新色标')
     x=ProofSheet(**p.model_dump());s.add(x);audit(s,u,'登记色标 '+p.code);s.commit();return pack(x)
 @app.put('/proofs/{pid}')
 def edit_proof(pid:int,p:ProofInput,s=Depends(db_session),u=Depends(writers)):
